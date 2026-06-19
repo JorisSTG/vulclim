@@ -4,19 +4,19 @@ import numpy as np
 import pandas as pd
 import glob
 import re
+import pydeck as pdk
 
-st.title("🌍 Carte TXxD climat")
+st.title("🌍 Carte climat géoréférencée")
 
 # -----------------------------
-# 🔹 Charger tous les fichiers
+# 🔹 fichiers
 # -----------------------------
 all_files = glob.glob("*.nc")
 
 # -----------------------------
-# 🔹 Extraire TXxD et RWL
+# 🔹 extraire options
 # -----------------------------
-tx_set = set()
-rwl_set = set()
+tx_set, rwl_set = set(), set()
 
 for f in all_files:
     m_tx = re.search(r"(TX\d+D)", f)
@@ -27,28 +27,22 @@ for f in all_files:
     if m_rwl:
         rwl_set.add(m_rwl.group(1))
 
-tx_list = sorted(tx_set)
-rwl_list = sorted(rwl_set)
+selected_tx = st.selectbox("TXxD", sorted(tx_set))
+selected_rwl = st.selectbox("RWL", sorted(rwl_set))
+month = st.slider("Mois (0=Janvier)", 0, 11, 0)
 
 # -----------------------------
-# 🔹 UI
-# -----------------------------
-selected_tx = st.selectbox("TXxD", tx_list)
-selected_rwl = st.selectbox("RWL", rwl_list)
-month = st.slider("Mois (0=Jan)", 0, 11, 0)
-
-# -----------------------------
-# 🔹 Filtrer fichiers
+# 🔹 filtrer fichiers
 # -----------------------------
 selected_files = [
     f for f in all_files
     if selected_tx in f and f"RWL-{selected_rwl}" in f
 ]
 
-st.write(f"Fichiers utilisés : {len(selected_files)}")
+st.write(f"{len(selected_files)} fichiers chargés")
 
 # -----------------------------
-# 🔹 Lecture des données
+# 🔹 lecture
 # -----------------------------
 @st.cache_data
 def load_data(files, tx, month):
@@ -78,16 +72,11 @@ def load_data(files, tx, month):
 
             dfs.append(df)
 
-        except Exception as e:
-            st.warning(f"Erreur : {f}")
+        except:
+            st.warning(f"Erreur fichier {f}")
 
     if dfs:
-        df_all = pd.concat(dfs)
-
-        # ✅ moyenne si plusieurs fichiers (important)
-        df_all = df_all.groupby(["lat", "lon"], as_index=False).mean()
-
-        return df_all
+        return pd.concat(dfs, ignore_index=True)
 
     return pd.DataFrame(columns=["lat", "lon", "value"])
 
@@ -95,9 +84,31 @@ def load_data(files, tx, month):
 df = load_data(selected_files, selected_tx, month)
 
 # -----------------------------
-# 🔹 Affichage carte
+# 🔹 carte pydeck (propre)
 # -----------------------------
 if not df.empty:
-    st.map(df, latitude="lat", longitude="lon", size="value")
+
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=df,
+        get_position='[lon, lat]',
+        get_radius=30000,   # taille point (adapter)
+        get_fill_color='[255, 140, 0, 150]',
+        pickable=True
+    )
+
+    view_state = pdk.ViewState(
+        latitude=df["lat"].mean(),
+        longitude=df["lon"].mean(),
+        zoom=2,
+        pitch=0,
+    )
+
+    st.pydeck_chart(pdk.Deck(
+        layers=[layer],
+        initial_view_state=view_state,
+        tooltip={"text": "{value}"}
+    ))
+
 else:
-    st.warning("Aucune donnée trouvée")
+    st.warning("Pas de données")
