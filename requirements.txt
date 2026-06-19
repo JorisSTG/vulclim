@@ -1,0 +1,18 @@
+# Core
+streamlit>=1.35
+numpy>=1.24
+pandas>=2.0
+xarray>=2023.0
+netcdf4>=1.6
+
+# Cartographie moderne (interactive)
+pydeck>=0.8
+
+# Optionnel mais très utile
+scipy>=1.10
+
+# Pour meilleure gestion NetCDF (optionnel mais conseillé)
+h5netcdf>=1.3
+
+# Visualization avancée (si tu veux aller plus loin)
+matplotlib>=3.7
