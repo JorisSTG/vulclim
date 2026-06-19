@@ -1,64 +1,71 @@
 import streamlit as st
 import xarray as xr
-import os
-import re
-import glob
 import numpy as np
 import pandas as pd
+import glob
+import re
 
-st.title("🌍 Visualisation TXxD")
-
-base_dir = "."
+st.title("🌍 Carte TXxD climat")
 
 # -----------------------------
-# 🔹 Extraction des options
+# 🔹 Charger tous les fichiers
 # -----------------------------
-tx_values = sorted([d for d in os.listdir(base_dir)
-                    if d.startswith("TX") and d.endswith("D")])
+all_files = glob.glob("*.nc")
 
-selected_tx = st.selectbox("Choisir TXxD", tx_values)
-
-# Trouver tous les fichiers du TX choisi
-pattern = os.path.join(base_dir, selected_tx, "*", "*.nc")
-files = glob.glob(pattern)
-
-# Extraire RWL disponibles
+# -----------------------------
+# 🔹 Extraire TXxD et RWL
+# -----------------------------
+tx_set = set()
 rwl_set = set()
-for f in files:
-    m = re.search(r"RWL-(\d+)", f)
-    if m:
-        rwl_set.add(m.group(1))
 
-rwl_list = sorted(list(rwl_set))
-selected_rwl = st.selectbox("Choisir RWL", rwl_list)
+for f in all_files:
+    m_tx = re.search(r"(TX\d+D)", f)
+    m_rwl = re.search(r"RWL-(\d+)", f)
 
-# Mois (0-11)
-selected_month = st.slider("Choisir mois (index)", 0, 11, 0)
+    if m_tx:
+        tx_set.add(m_tx.group(1))
+    if m_rwl:
+        rwl_set.add(m_rwl.group(1))
+
+tx_list = sorted(tx_set)
+rwl_list = sorted(rwl_set)
 
 # -----------------------------
-# 🔹 Chargement des données
+# 🔹 UI
+# -----------------------------
+selected_tx = st.selectbox("TXxD", tx_list)
+selected_rwl = st.selectbox("RWL", rwl_list)
+month = st.slider("Mois (0=Jan)", 0, 11, 0)
+
+# -----------------------------
+# 🔹 Filtrer fichiers
+# -----------------------------
+selected_files = [
+    f for f in all_files
+    if selected_tx in f and f"RWL-{selected_rwl}" in f
+]
+
+st.write(f"Fichiers utilisés : {len(selected_files)}")
+
+# -----------------------------
+# 🔹 Lecture des données
 # -----------------------------
 @st.cache_data
-def load_data(files, tx, rwl, month):
-    all_data = []
+def load_data(files, tx, month):
+    dfs = []
 
     for f in files:
-        if f"RWL-{rwl}" not in f:
-            continue
-
         try:
             ds = xr.open_dataset(f)
 
-            var_name = tx  # ex: TX40D
-            if var_name not in ds:
+            if tx not in ds:
                 continue
 
-            data = ds[var_name].isel(time=month)
+            data = ds[tx].isel(time=month)
 
             lat = ds["lat"].values
             lon = ds["lon"].values
 
-            # meshgrid
             lon2d, lat2d = np.meshgrid(lon, lat)
 
             df = pd.DataFrame({
@@ -67,26 +74,29 @@ def load_data(files, tx, rwl, month):
                 "value": data.values.ravel()
             })
 
-            df.dropna(inplace=True)
+            df = df.dropna()
 
-            all_data.append(df)
+            dfs.append(df)
 
         except Exception as e:
-            st.warning(f"Erreur fichier {f}: {e}")
+            st.warning(f"Erreur : {f}")
 
-    if all_data:
-        return pd.concat(all_data, ignore_index=True)
-    else:
-        return pd.DataFrame(columns=["lat", "lon", "value"])
+    if dfs:
+        df_all = pd.concat(dfs)
+
+        # ✅ moyenne si plusieurs fichiers (important)
+        df_all = df_all.groupby(["lat", "lon"], as_index=False).mean()
+
+        return df_all
+
+    return pd.DataFrame(columns=["lat", "lon", "value"])
 
 
-df = load_data(files, selected_tx, selected_rwl, selected_month)
+df = load_data(selected_files, selected_tx, month)
 
 # -----------------------------
 # 🔹 Affichage carte
 # -----------------------------
-st.write(f"Points affichés: {len(df)}")
-
 if not df.empty:
     st.map(df, latitude="lat", longitude="lon", size="value")
 else:
