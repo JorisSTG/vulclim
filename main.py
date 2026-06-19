@@ -6,7 +6,7 @@ import glob
 import re
 import pydeck as pdk
 
-st.title("🌍 Carte climat raster (3 classes)")
+st.title("🌍 Carte climat (par endroit)")
 
 # -----------------------------
 # 🔹 fichiers
@@ -14,67 +14,96 @@ st.title("🌍 Carte climat raster (3 classes)")
 all_files = glob.glob("*.nc")
 
 # -----------------------------
-# 🔹 extract options
+# 🔹 extraction des métadonnées
 # -----------------------------
-tx_set, rwl_set = set(), set()
+info = []
 
 for f in all_files:
     m_tx = re.search(r"(TX\d+D)", f)
     m_rwl = re.search(r"RWL-(\d+)", f)
-    if m_tx:
-        tx_set.add(m_tx.group(1))
-    if m_rwl:
-        rwl_set.add(m_rwl.group(1))
+    m_loc = re.search(r"FR-([^_]+)", f)
 
-selected_tx = st.selectbox("TXxD", sorted(tx_set))
-selected_rwl = st.selectbox("RWL", sorted(rwl_set))
-month = st.slider("Mois", 0, 11, 0)
+    if m_tx and m_rwl and m_loc:
+        info.append({
+            "file": f,
+            "tx": m_tx.group(1),
+            "rwl": m_rwl.group(1),
+            "loc": m_loc.group(1)
+        })
 
-# -----------------------------
-# 🔹 filtrage fichiers
-# -----------------------------
-selected_files = [
-    f for f in all_files
-    if selected_tx in f and f"RWL-{selected_rwl}" in f
-]
-
-st.write(f"{len(selected_files)} fichiers")
+df_info = pd.DataFrame(info)
 
 # -----------------------------
-# 🔹 fonction couleur 3 classes
+# 🔹 UI (ordre demandé)
+# -----------------------------
+loc_list = sorted(df_info["loc"].unique())
+selected_loc = st.selectbox("Endroit", loc_list)
+
+df_loc = df_info[df_info["loc"] == selected_loc]
+
+tx_list = sorted(df_loc["tx"].unique())
+selected_tx = st.selectbox("TXxD", tx_list)
+
+df_tx = df_loc[df_loc["tx"] == selected_tx]
+
+rwl_list = sorted(df_tx["rwl"].unique())
+selected_rwl = st.selectbox("RWL", rwl_list)
+
+mode = st.selectbox("Mode", ["Mensuel", "Annuel"])
+
+month = 0
+if mode == "Mensuel":
+    month = st.slider("Mois (0=Janvier)", 0, 11, 0)
+
+# -----------------------------
+# 🔹 filtrer fichiers
+# -----------------------------
+selected_files = df_tx[df_tx["rwl"] == selected_rwl]["file"].tolist()
+
+st.write(f"{len(selected_files)} fichier(s)")
+
+# -----------------------------
+# 🔹 classification couleurs
 # -----------------------------
 def classify_colors(values):
     vmin = np.nanmin(values)
     vmax = np.nanmax(values)
 
-    bins = np.linspace(vmin, vmax, 4)  # 3 classes
+    bins = np.linspace(vmin, vmax, 4)
 
     colors = []
     for v in values:
         if np.isnan(v):
             colors.append([0, 0, 0, 0])
         elif v <= bins[1]:
-            colors.append([200, 200, 200, 180])   # gris clair
+            colors.append([200, 200, 200, 180])  # gris clair
         elif v <= bins[2]:
-            colors.append([255, 200, 0, 180])     # jaune foncé
+            colors.append([255, 200, 0, 180])    # jaune
         else:
-            colors.append([255, 0, 0, 180])       # rouge
+            colors.append([255, 0, 0, 180])      # rouge
     return colors
 
 # -----------------------------
-# 🔹 lecture data
+# 🔹 lecture NetCDF
 # -----------------------------
 @st.cache_data
-def load_data(files, tx, month):
+def load_data(files, tx, mode, month):
     dfs = []
 
     for f in files:
         try:
             ds = xr.open_dataset(f)
+
             if tx not in ds:
                 continue
 
-            data = ds[tx].isel(time=month).values
+            var = ds[tx]
+
+            if mode == "Annuel":
+                data = var.sum(dim="time").values
+            else:
+                data = var.isel(time=month).values
+
             lat = ds["lat"].values
             lon = ds["lon"].values
 
@@ -86,11 +115,9 @@ def load_data(files, tx, month):
                 "lat": lat2d.ravel(),
                 "lon": lon2d.ravel(),
                 "value": values
-            })
+            }).dropna()
 
-            df = df.dropna()
-
-            # ✅ classification par fichier
+            # ✅ classification PAR FICHIER (donc PAR ENDROIT)
             df["color"] = classify_colors(df["value"].values)
 
             dfs.append(df)
@@ -104,35 +131,33 @@ def load_data(files, tx, month):
     return pd.DataFrame(columns=["lat", "lon", "value", "color"])
 
 
-df = load_data(selected_files, selected_tx, month)
+df = load_data(selected_files, selected_tx, mode, month)
 
 # -----------------------------
-# 🔹 calcul taille pixel réel
+# 🔹 affichage carte
 # -----------------------------
 if not df.empty:
-    # approx taille pixel en mètres (~3km chez toi)
-    radius = 2000  # ajustable
 
     layer = pdk.Layer(
         "ScatterplotLayer",
         data=df,
         get_position='[lon, lat]',
         get_fill_color="color",
-        get_radius=radius,
+        get_radius=2000,  # ~taille pixel (à ajuster)
         pickable=True,
-        opacity=0.8
+        opacity=0.9
     )
 
     view = pdk.ViewState(
         latitude=float(df["lat"].mean()),
         longitude=float(df["lon"].mean()),
-        zoom=3
+        zoom=5,
     )
 
     st.pydeck_chart(pdk.Deck(
         layers=[layer],
         initial_view_state=view,
-        tooltip={"text": "{value}"}
+        tooltip={"text": "Valeur: {value}"}
     ))
 
 else:
